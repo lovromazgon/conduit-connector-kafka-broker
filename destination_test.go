@@ -1,16 +1,16 @@
-package connectorname_test
+package kafka-broker_test
 
 import (
 	"context"
 	"testing"
 
-	connectorname "github.com/conduitio/conduit-connector-connectorname"
+	kafka-broker "github.com/lovromazgon/conduit-connector-kafka-broker"
 	"github.com/matryer/is"
 )
 
 func TestTeardown_NoOpen(t *testing.T) {
 	is := is.New(t)
-	con := connectorname.NewDestination()
+	con := kafka-broker.NewDestination()
 	err := con.Teardown(context.Background())
 	is.NoErr(err)
 }

@@ -1,4 +1,4 @@
-module github.com/conduitio/conduit-connector-connectorname
+module github.com/lovromazgon/conduit-connector-kafka-broker
 
 go 1.21
 

@@ -1,4 +1,4 @@
-package connectorname
+package kafka-broker
 
 import sdk "github.com/conduitio/conduit-connector-sdk"
 

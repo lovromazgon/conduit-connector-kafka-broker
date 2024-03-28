@@ -1,10 +1,8 @@
 package kafkabroker
 
 // Config contains shared config parameters, common to the source and
-// destination. If you don't need shared parameters you can entirely remove this
-// file.
+// destination.
 type Config struct {
-	// GlobalConfigParam is named global_config_param_name and needs to be
-	// provided by the user.
-	GlobalConfigParam string `json:"global_config_param_name" validate:"required"`
+	// Address for broker to listen on.
+	Addr string `json:"addr" default:"0.0.0.0:9092"`
 }

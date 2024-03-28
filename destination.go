@@ -1,4 +1,4 @@
-package kafka-broker
+package kafkabroker
 
 //go:generate paramgen -output=paramgen_dest.go DestinationConfig
 

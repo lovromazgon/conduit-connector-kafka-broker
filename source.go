@@ -4,27 +4,30 @@ package kafkabroker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"strconv"
+	"strings"
+
+	"github.com/lovromazgon/conduit-connector-kafka-broker/internal/kafka"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/lovromazgon/conduit-connector-kafka-broker/internal"
-	"github.com/travisjeffery/jocko/jocko"
-	"github.com/travisjeffery/jocko/jocko/config"
-	"github.com/travisjeffery/jocko/jocko/structs"
 )
 
 type Source struct {
 	sdk.UnimplementedSource
 
 	config SourceConfig
+	host   string
+	port   int32
 
-	broker *jocko.Broker
-	server *jocko.Server
+	replica *kafka.Replica
+	handler kafka.RequestHandler
+	server  *kafka.Server
 
-	messages *internal.Fanin[Message]
+	messages *internal.Fanin[kafka.Batch]
+
+	cached []sdk.Record
 }
 
 type SourceConfig struct {
@@ -45,91 +48,81 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
+
+	addrSplit := strings.Split(s.config.Addr, ":")
+	if len(addrSplit) != 2 {
+		return fmt.Errorf("invalid address: %s", s.config.Addr)
+	}
+	port, err := strconv.ParseInt(addrSplit[1], 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid port %s: %w", addrSplit[1], err)
+	}
+
+	s.host = addrSplit[0]
+	s.port = int32(port)
+
 	return nil
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) error {
 	logger := sdk.Logger(ctx)
 
-	s.messages = internal.NewFanin[Message]()
+	s.messages = internal.NewFanin[kafka.Batch]()
 
-	brokerCfg := config.DefaultConfig()
+	s.replica = kafka.NewReplica(s.host, s.port)
+	s.handler = kafka.NewSourceRequestHandler(s.replica)
+	s.server = kafka.NewServer(s.handler, *logger)
 
-	brokerCfg.Bootstrap = true
-	brokerCfg.BootstrapExpect = 1
-	brokerCfg.DataDir = os.TempDir() + "jocko"
-	brokerCfg.RaftAddr = "127.0.0.1:0"
-	brokerCfg.SerfLANConfig.MemberlistConfig.BindAddr = "127.0.0.1:0"
-	brokerCfg.CommitLogMiddleware = func(log structs.CommitLog, partition structs.Partition) structs.CommitLog {
-		logger.Info().
-			Str("topic", partition.Topic).
-			Int32("partition", partition.ID).
-			Msg("creating commit log")
+	s.replica.OnChange(func() {
+		s.messages.Reload(s.replica.Queues())
+	})
 
-		tcl := NewTeeCommitLog(log, partition, logger)
-		s.messages.Add(tcl.Messages())
-		logger.Info().Msg("commit log created")
-		return tcl
-	}
-
-	brokerCfg.Addr = s.config.Addr
-
-	logger.Info().Str("dir", brokerCfg.DataDir).Msg("starting broker")
-	broker, err := jocko.NewBroker(brokerCfg)
-	if err != nil {
-		return err
-	}
-
-	logger.Info().Str("addr", brokerCfg.Addr).Msg("starting server")
-	srv := jocko.NewServer(brokerCfg, broker, nil)
-	if err := srv.Start(context.Background()); err != nil {
-		logger.Err(err).Msg("server start failed")
-		if shutdownErr := broker.Shutdown(); shutdownErr != nil {
-			logger.Err(shutdownErr).Msg("broker shutdown failed")
-		}
-		return err
-	}
-
-	s.broker = broker
-	s.server = srv
+	go func() {
+		// TODO handle error
+		_ = s.server.Run(ctx, s.config.Addr)
+	}()
 
 	return nil
 }
 
 func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
-	msg, err := s.messages.Recv(ctx)
+	if len(s.cached) > 0 {
+		rec := s.cached[0]
+		s.cached = s.cached[1:]
+		return rec, nil
+	}
+
+	batch, err := s.messages.Recv(ctx)
 	if err != nil {
 		return sdk.Record{}, err
 	}
 
-	rec := sdk.Util.Source.NewRecordCreate(
-		[]byte(fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)),
-		sdk.Metadata{
-			"kafkabroker.topic":     msg.Topic,
-			"kafkabroker.partition": strconv.FormatInt(int64(msg.Partition), 10),
-			"kafkabroker.offset":    strconv.FormatInt(msg.Offset, 10),
-		},
-		sdk.RawData(msg.Key),
-		sdk.RawData(msg.Value),
-	)
-	for _, header := range msg.Headers {
-		rec.Metadata[header.Key] = string(header.Value)
+	s.cached = make([]sdk.Record, 0, int(batch.NumRecords))
+	recs := readRawRecords(int(batch.NumRecords), batch.Records)
+	for i, rec := range recs {
+		// TODO what if the rest of the records are never read? We can lose stuff here
+		s.cached[i] = sdk.Util.Source.NewRecordCreate(
+			[]byte(fmt.Sprintf("%s:%d:%d", batch.Topic, batch.Partition, batch.Offset)),
+			sdk.Metadata{
+				"kafkabroker.topic":     batch.Topic,
+				"kafkabroker.partition": strconv.FormatInt(int64(batch.Partition), 10),
+				"kafkabroker.offset":    strconv.FormatInt(batch.Offset+int64(rec.OffsetDelta), 10),
+			},
+			sdk.RawData(rec.Key),
+			sdk.RawData(rec.Value),
+		)
+		for _, header := range rec.Headers {
+			s.cached[i].Metadata[header.Key] = string(header.Value)
+		}
 	}
 
+	rec := s.cached[0]
+	s.cached = s.cached[1:]
 	return rec, nil
 }
 
 func (s *Source) Ack(context.Context, sdk.Position) error { return nil }
 
 func (s *Source) Teardown(context.Context) error {
-	var errs []error
-	if s.broker != nil {
-		err := s.broker.Shutdown()
-		errs = append(errs, err)
-	}
-	if s.server != nil {
-		err := s.server.Shutdown()
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return nil // TODO
 }

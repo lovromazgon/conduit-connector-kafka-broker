@@ -46,8 +46,8 @@ func (f *Fanin[T]) Recv(ctx context.Context) (T, error) {
 	}
 }
 
-func (f *Fanin[T]) Add(in <-chan T) {
-	f.in = append(f.in, in)
+func (f *Fanin[T]) Reload(in []<-chan T) {
+	f.in = in
 	f.reload()
 
 	// notify the selectFunc to reload

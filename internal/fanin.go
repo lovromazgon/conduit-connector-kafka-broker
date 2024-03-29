@@ -19,7 +19,6 @@ func NewFanin[T any](in ...<-chan T) *Fanin[T] {
 		interrupt: make(chan struct{}, 1),
 	}
 	f.reload()
-	<-f.interrupt
 	return f
 }
 

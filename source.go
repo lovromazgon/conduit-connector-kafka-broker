@@ -49,32 +49,43 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) error {
+	logger := sdk.Logger(ctx)
+
 	s.messages = internal.NewFanin[Message]()
 
 	brokerCfg := config.DefaultConfig()
 
 	brokerCfg.Bootstrap = true
 	brokerCfg.BootstrapExpect = 1
-	brokerCfg.DataDir = os.TempDir() + "/jocko"
+	brokerCfg.DataDir = os.TempDir() + "jocko"
 	brokerCfg.RaftAddr = "127.0.0.1:0"
 	brokerCfg.SerfLANConfig.MemberlistConfig.BindAddr = "127.0.0.1:0"
 	brokerCfg.CommitLogMiddleware = func(log structs.CommitLog, partition structs.Partition) structs.CommitLog {
-		tcl := NewTeeCommitLog(log, partition)
+		logger.Info().
+			Str("topic", partition.Topic).
+			Int32("partition", partition.ID).
+			Msg("creating commit log")
+
+		tcl := NewTeeCommitLog(log, partition, logger)
 		s.messages.Add(tcl.Messages())
-		return log
+		logger.Info().Msg("commit log created")
+		return tcl
 	}
 
 	brokerCfg.Addr = s.config.Addr
 
+	logger.Info().Str("dir", brokerCfg.DataDir).Msg("starting broker")
 	broker, err := jocko.NewBroker(brokerCfg)
 	if err != nil {
 		return err
 	}
 
+	logger.Info().Str("addr", brokerCfg.Addr).Msg("starting server")
 	srv := jocko.NewServer(brokerCfg, broker, nil)
 	if err := srv.Start(context.Background()); err != nil {
+		logger.Err(err).Msg("server start failed")
 		if shutdownErr := broker.Shutdown(); shutdownErr != nil {
-			sdk.Logger(ctx).Err(shutdownErr).Msg("broker shutdown failed")
+			logger.Err(shutdownErr).Msg("broker shutdown failed")
 		}
 		return err
 	}
@@ -83,10 +94,6 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) error {
 	s.server = srv
 
 	return nil
-}
-
-func (s *Source) onNewReplica(log structs.CommitLog, partition structs.Partition) {
-
 }
 
 func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
@@ -102,9 +109,13 @@ func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
 			"kafkabroker.partition": strconv.FormatInt(int64(msg.Partition), 10),
 			"kafkabroker.offset":    strconv.FormatInt(msg.Offset, 10),
 		},
-		sdk.RawData(msg.Key()),
-		sdk.RawData(msg.Value()),
+		sdk.RawData(msg.Key),
+		sdk.RawData(msg.Value),
 	)
+	for _, header := range msg.Headers {
+		rec.Metadata[header.Key] = string(header.Value)
+	}
+
 	return rec, nil
 }
 

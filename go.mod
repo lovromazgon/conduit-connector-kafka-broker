@@ -6,7 +6,7 @@ require (
 	github.com/conduitio/conduit-connector-sdk v0.8.0
 	github.com/golangci/golangci-lint v1.55.2
 	github.com/matryer/is v1.4.1
-	github.com/rs/zerolog v1.31.0
+	github.com/rs/zerolog v1.32.0
 	github.com/twmb/franz-go v1.16.1
 	github.com/twmb/franz-go/pkg/kmsg v1.7.0
 )

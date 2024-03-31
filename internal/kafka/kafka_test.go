@@ -55,7 +55,7 @@ func TestKafka(t *testing.T) {
 	is.NoErr(err)
 	t.Log(resp)
 
-	var batch kmsg.RecordBatch
+	var batch Batch
 	go func() {
 		batch = <-replica.Queues()[0]
 	}()

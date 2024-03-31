@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/twmb/franz-go/pkg/kbin"
+	"github.com/twmb/franz-go/pkg/kmsg"
+
 	"github.com/lovromazgon/conduit-connector-kafka-broker/internal/kafka"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -97,7 +100,7 @@ func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
 		return sdk.Record{}, err
 	}
 
-	s.cached = make([]sdk.Record, 0, int(batch.NumRecords))
+	s.cached = make([]sdk.Record, int(batch.NumRecords))
 	recs := readRawRecords(int(batch.NumRecords), batch.Records)
 	for i, rec := range recs {
 		// TODO what if the rest of the records are never read? We can lose stuff here
@@ -123,6 +126,23 @@ func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
 
 func (s *Source) Ack(context.Context, sdk.Position) error { return nil }
 
-func (s *Source) Teardown(context.Context) error {
-	return nil // TODO
+// TODO
+func (s *Source) Teardown(context.Context) error { return nil }
+
+// readRawRecords reads n records from in and returns them, returning early if
+// there were partial records.
+func readRawRecords(n int, in []byte) []kmsg.Record {
+	rs := make([]kmsg.Record, n)
+	for i := 0; i < n; i++ {
+		length, used := kbin.Varint(in)
+		total := used + int(length)
+		if used == 0 || length < 0 || len(in) < total {
+			return rs[:i]
+		}
+		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {
+			return rs[:i]
+		}
+		in = in[total:]
+	}
+	return rs
 }

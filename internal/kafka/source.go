@@ -126,30 +126,18 @@ func (h *SourceRequestHandler) Metadata(ctx context.Context, req *kmsg.MetadataR
 		ControllerID: 0,
 		Topics:       make([]kmsg.MetadataResponseTopic, 0, len(req.Topics)),
 	}
-	for _, reqTopic := range req.Topics {
-		t, err := h.replica.GetTopic(*reqTopic.Topic)
+
+	buildMetadataResponseTopic := func(t *Topic, err *kerr.Error) kmsg.MetadataResponseTopic {
 		if err != nil {
-			if err != kerr.UnknownTopicOrPartition || !req.AllowAutoTopicCreation {
-				resp.Topics = append(resp.Topics, kmsg.MetadataResponseTopic{
-					Topic:     reqTopic.Topic,
-					ErrorCode: err.Code,
-				})
-				continue
-			}
-			// auto create topic
-			t, err = h.replica.CreateTopic(*reqTopic.Topic, reqTopic.TopicID, 1)
-			if err != nil {
-				resp.Topics = append(resp.Topics, kmsg.MetadataResponseTopic{
-					TopicID:   t.TopicID,
-					Topic:     reqTopic.Topic,
-					ErrorCode: err.Code,
-				})
-				continue
+			return kmsg.MetadataResponseTopic{
+				TopicID:   t.TopicID,
+				Topic:     &t.Topic,
+				ErrorCode: err.Code,
 			}
 		}
 		respTopic := kmsg.MetadataResponseTopic{
 			TopicID:              t.TopicID,
-			Topic:                reqTopic.Topic,
+			Topic:                &t.Topic,
 			IsInternal:           false,
 			Partitions:           make([]kmsg.MetadataResponseTopicPartition, 0, len(t.Partitions)),
 			AuthorizedOperations: -2147483648,
@@ -166,8 +154,32 @@ func (h *SourceRequestHandler) Metadata(ctx context.Context, req *kmsg.MetadataR
 			}
 			respTopic.Partitions = append(respTopic.Partitions, respPartition)
 		}
-		resp.Topics = append(resp.Topics, respTopic)
+		return respTopic
 	}
+
+	if req.Topics == nil {
+		topics := h.replica.GetTopics()
+		resp.Topics = make([]kmsg.MetadataResponseTopic, 0, len(topics))
+		for _, t := range topics {
+			resp.Topics = append(resp.Topics, buildMetadataResponseTopic(t, nil))
+		}
+	} else {
+		for _, reqTopic := range req.Topics {
+			t, err := h.replica.GetTopic(*reqTopic.Topic)
+			if err != nil {
+				t = &Topic{Topic: *reqTopic.Topic, TopicID: reqTopic.TopicID}
+				if err == kerr.UnknownTopicOrPartition && req.AllowAutoTopicCreation {
+					// auto create topic
+					t, err = h.replica.CreateTopic(*reqTopic.Topic, reqTopic.TopicID, 1)
+					if err != nil {
+						t = &Topic{Topic: *reqTopic.Topic, TopicID: reqTopic.TopicID}
+					}
+				}
+			}
+			resp.Topics = append(resp.Topics, buildMetadataResponseTopic(t, err))
+		}
+	}
+
 	return &resp
 }
 
@@ -183,16 +195,50 @@ func (h *SourceRequestHandler) ApiVersions(ctx context.Context, req *kmsg.ApiVer
 	}
 }
 
+func (h *SourceRequestHandler) ListOffsets(ctx context.Context, req *kmsg.ListOffsetsRequest) *kmsg.ListOffsetsResponse {
+	resp := kmsg.ListOffsetsResponse{
+		Version: req.GetVersion(),
+		Topics:  make([]kmsg.ListOffsetsResponseTopic, 0, len(req.Topics)),
+	}
+	for _, reqTopic := range req.Topics {
+		respTopic := kmsg.ListOffsetsResponseTopic{
+			Topic:      reqTopic.Topic,
+			Partitions: make([]kmsg.ListOffsetsResponseTopicPartition, 0, len(reqTopic.Partitions)),
+		}
+		t, err := h.replica.GetTopic(reqTopic.Topic)
+		if err != nil {
+			for range reqTopic.Partitions {
+				respTopic.Partitions = append(respTopic.Partitions, kmsg.ListOffsetsResponseTopicPartition{
+					Partition: reqTopic.Partitions[0].Partition,
+					ErrorCode: err.Code,
+				})
+			}
+			resp.Topics = append(resp.Topics, respTopic)
+			continue
+		}
+		for _, tp := range t.Partitions {
+			for _, reqPartition := range reqTopic.Partitions {
+				if tp.Partition != reqPartition.Partition {
+					continue
+				}
+				respPartition := kmsg.ListOffsetsResponseTopicPartition{
+					Partition:   tp.Partition,
+					LeaderEpoch: -1,
+					Offset:      tp.Offset,
+				}
+				respTopic.Partitions = append(respTopic.Partitions, respPartition)
+				break
+			}
+		}
+		resp.Topics = append(resp.Topics, respTopic)
+	}
+	return &resp
+}
+
 func (h *SourceRequestHandler) Fetch(ctx context.Context, req *kmsg.FetchRequest) *kmsg.FetchResponse {
 	return &kmsg.FetchResponse{
 		Version:   req.GetVersion(),
 		ErrorCode: kerr.InvalidRequest.Code,
-	}
-}
-
-func (h *SourceRequestHandler) ListOffsets(ctx context.Context, req *kmsg.ListOffsetsRequest) *kmsg.ListOffsetsResponse {
-	return &kmsg.ListOffsetsResponse{
-		Version: req.GetVersion(),
 	}
 }
 

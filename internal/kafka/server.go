@@ -93,6 +93,11 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 
+		s.logger.Info().
+			Str("remoteAddr", conn.RemoteAddr().String()).
+			Int16("apiKey", req.Header.APIKey).
+			Msg("handling request")
+
 		// Handle request
 		resp, err := s.handleRequest(ctx, req)
 		if err != nil {

@@ -30,8 +30,10 @@ type Topic struct {
 }
 
 type Replica struct {
-	Host   string
-	Port   int32
+	Host string
+	Port int32
+
+	// TODO topics are pointers, we should deep copy them whenever we return them
 	Topics []*Topic
 
 	onChange func()
@@ -138,12 +140,15 @@ func (r *Replica) DeleteTopic(topic string) (*Topic, *kerr.Error) {
 	}
 
 	r.Topics = append(r.Topics[:i], r.Topics[i+1:]...)
-	// for _, p := range t.Partitions {
-	// 	close(p.Queue)
-	// }
 
 	r.notifyChange()
 	return t, nil
+}
+
+func (r *Replica) GetTopics() []*Topic {
+	r.m.RLock()
+	defer r.m.RUnlock()
+	return r.Topics
 }
 
 func (r *Replica) GetTopic(topic string) (*Topic, *kerr.Error) {

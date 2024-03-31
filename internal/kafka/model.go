@@ -1,7 +1,6 @@
 package kafka
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -83,7 +82,7 @@ func (r Response) Encode(out io.Writer) (int, error) {
 		buf = append(buf, 0)
 	}
 	buf = r.Body.AppendTo(buf)
-	fmt.Printf("\nRESP:\n%s\n", hex.Dump(buf[8:]))
+	// fmt.Printf("\nRESP:\n%s\n", hex.Dump(buf[8:]))
 
 	kbin.AppendInt32(buf[:0], int32(len(buf))-4)
 	kbin.AppendInt32(buf[:4], r.CorrelationID)

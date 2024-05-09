@@ -8,7 +8,7 @@ require (
 	github.com/matryer/is v1.4.1
 	github.com/rs/zerolog v1.31.0
 	github.com/twmb/franz-go v1.16.1
-	github.com/twmb/franz-go/pkg/kmsg v1.7.0
+	github.com/twmb/franz-go/pkg/kmsg v1.8.0
 )
 
 require (
